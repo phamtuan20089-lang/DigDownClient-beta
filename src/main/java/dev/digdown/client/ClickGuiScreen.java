@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Random;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 
@@ -28,14 +29,14 @@ import net.minecraft.sounds.SoundEvents;
  * rê chuột, gõ tìm kiếm. Vẽ bằng GuiGraphics.
  */
 public class ClickGuiScreen extends Screen {
-    private static final int BG = 0xF010091A;
-    private static final int CARD = 0xFF1F1632;
-    private static final int CARD_HOVER = 0xFF2B2043;
-    private static final int LINE = 0xFF362A50;
-    private static final int ACCENT = 0xFFFF5FB8;
-    private static final int TEXT = 0xFFFFFFFF;
-    private static final int DIM = 0xFF9A8FB0;
-    private static final int SWITCH_OFF = 0xFF4A4060;
+    private static final int BG = 0xF0E8F7F2;
+    private static final int CARD = 0xFFE0F2EA;
+    private static final int CARD_HOVER = 0xFFCBE8DB;
+    private static final int LINE = 0xFFB0D6C7;
+    private static final int ACCENT = 0xFF24B78A;
+    private static final int TEXT = 0xFF173A31;
+    private static final int DIM = 0xFF55766A;
+    private static final int SWITCH_OFF = 0xFF9AB9AC;
 
     private static final int HEADER = 30;
     private static final int SIDEBAR = 96;
@@ -59,8 +60,8 @@ public class ClickGuiScreen extends Screen {
     private static final int GRIP = 14; // vùng kéo ở góc dưới bên phải
 
     // Màu viền
-    private static final int WINDOW_BORDER = 0xFF3E3358;
-    private static final int CARD_BORDER = 0xFF2E2446;
+    private static final int WINDOW_BORDER = 0xFF9BCDB9;
+    private static final int CARD_BORDER = 0xFFB0D6C7;
 
     // Tốc độ hoạt ảnh: càng lớn càng nhanh, khoảng 0,15 đến 0,3 giây là xong
     private static final float K_HOVER = 14F;  // rê chuột
@@ -151,6 +152,12 @@ public class ClickGuiScreen extends Screen {
     private long lastFrameNs = System.nanoTime();
     private float dt = 1F / 60F; // thời gian giữa hai khung hình (giây)
 
+    // Tia sét trang trí nền: từng tia có chu kỳ spawn/strike/impact/fade độc lập.
+    private static final Random LIGHTNING_RANDOM = new Random();
+    private static long nextLightningAt = System.currentTimeMillis() + 900L;
+    private static final List<LightningBolt> LIGHTNING = new ArrayList<>();
+    private record LightningBolt(int startX, int endY, long bornAt, long seed) {}
+
     public ClickGuiScreen() {
         super(Component.literal("DigDown"));
         playClick(1.5F); // tiếng tick khi mở menu
@@ -224,12 +231,14 @@ public class ClickGuiScreen extends Screen {
 
         // Khung cửa sổ bo góc: viền mờ và một đường sáng mỏng bên trong
         fillRounded(g, x, y, x + w, y + h, WINDOW_R, mul(BG));
+        drawLightningBackground(g, x + 4, y + HEADER + 2, x + w - 4, y + h - 4);
         strokeRounded(g, x, y, x + w, y + h, WINDOW_R, mul(WINDOW_BORDER));
         strokeRounded(g, x + 1, y + 1, x + w - 1, y + h - 1, WINDOW_R - 1, mul(withAlpha(0xFFFFFFFF, 0.06F)));
 
         // ---- Thanh trên: logo + tên + tab + nút đóng
         fillRounded(g, x + 10, y + 6, x + 28, y + 24, 9, mul(ACCENT));
-        drawText(g, font, "D", x + 10 + (18 - textWidth(font, "D")) / 2, y + 11, mul(TEXT));
+        drawText(g, font, "D", x + 10 + (18 - textWidth(font, "D")) / 2, y + 8, mul(TEXT));
+        drawText(g, font, "C", x + 10 + (18 - textWidth(font, "C")) / 2, y + 16, mul(withAlpha(TEXT, 0.78F)));
         drawText(g, font, "DIGDOWN", x + 34, y + 11, mul(TEXT));
 
         int tx = x + 34 + textWidth(font, "DIGDOWN") + 14;
@@ -505,6 +514,51 @@ public class ClickGuiScreen extends Screen {
      * Vẽ một thẻ (hoặc hàng tùy chọn con) tại vị trí (fx, fy) rộng fw, độ trong suốt a.
      * Công tắc, viền, nền và núm đều đổi mượt theo trạng thái. Chỉ thẻ đang hiện mới được bấm.
      */
+    /** Nền mint sạch với các tia sét ngắn đánh xuống, chạy theo chu kỳ độc lập. */
+    private static void drawLightningBackground(GuiGraphics g, int left, int top, int right, int bottom) {
+        long now = System.currentTimeMillis();
+        if (now >= nextLightningAt) {
+            int count = LIGHTNING_RANDOM.nextInt(1, 3);
+            for (int i = 0; i < count; i++) {
+                int sx = left + LIGHTNING_RANDOM.nextInt(Math.max(1, right - left));
+                int ey = top + LIGHTNING_RANDOM.nextInt(Math.max(1, bottom - top));
+                LIGHTNING.add(new LightningBolt(sx, ey, now, LIGHTNING_RANDOM.nextLong()));
+            }
+            nextLightningAt = now + LIGHTNING_RANDOM.nextInt(900, 1900);
+        }
+        LIGHTNING.removeIf(b -> now - b.bornAt() > 420L);
+        for (LightningBolt bolt : LIGHTNING) {
+            float age = (now - bolt.bornAt()) / 420F; // spawn -> strike/impact -> fade
+            float alpha = age < 0.18F ? age / 0.18F : age > 0.62F ? (1F - age) / 0.38F : 1F;
+            alpha = Math.max(0F, Math.min(1F, alpha)) * 0.24F; // nhẹ để không che module
+            Random r = new Random(bolt.seed());
+            int px = bolt.startX();
+            int py = top;
+            int steps = Math.max(5, (bolt.endY() - top) / 5);
+            for (int i = 0; i < steps; i++) {
+                py = top + i * 5;
+                px += r.nextInt(-5, 6);
+                if (px < left || px > right) px = Math.max(left, Math.min(right, px));
+                g.fill(px, py, px + 2, py + 4, withAlpha(0xFF54C9AE, alpha));
+                if (i > 2 && r.nextFloat() < 0.13F) {
+                    int branchX = px;
+                    int branchY = py;
+                    int dir = r.nextBoolean() ? 1 : -1;
+                    for (int j = 0; j < 3 + r.nextInt(4); j++) {
+                        branchX += dir * r.nextInt(2, 5);
+                        branchY += 3;
+                        g.fill(branchX, branchY, branchX + 1, branchY + 3, withAlpha(0xFF76DCC7, alpha * 0.75F));
+                    }
+                }
+            }
+            // Lóe impact ngắn ở đầu cuối, chỉ trong khoảng 90ms đầu của pha strike.
+            if (age > 0.16F && age < 0.28F) {
+                int flash = withAlpha(0xFFB7F5E7, alpha * 0.45F);
+                g.fill(bolt.startX() - 3, bolt.endY() - 2, bolt.startX() + 4, bolt.endY() + 3, flash);
+            }
+        }
+    }
+
     private void drawCell(GuiGraphics g, Font font, Object key, Card card,
                           float fx, float fy, float fw, float a, boolean interactive, int mouseX, int mouseY) {
         if (a < 0.02F) {
